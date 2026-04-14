@@ -1,0 +1,190 @@
+clc;
+clear;
+close all;
+
+%% STEP 1: SELECT FIRST AUDIO
+disp('Select FIRST audio file');
+[file1, path1] = uigetfile({'*.wav;*.mp3;*.ogg;*.mpeg;*.mp4'}, 'Select First Audio');
+
+if isequal(file1,0)
+    error('First file not selected');
+end
+
+file1_full = fullfile(path1, file1);
+disp('First file selected successfully');
+
+%% STEP 2: SELECT SECOND AUDIO
+disp('Select SECOND audio file');
+[file2, path2] = uigetfile({'*.wav;*.mp3;*.ogg;*.mpeg;*.mp4'}, 'Select Second Audio');
+
+if isequal(file2,0)
+    error('Second file not selected');
+end
+
+file2_full = fullfile(path2, file2);
+disp('Second file selected successfully');
+
+%% STEP 3: PROCESS BOTH FILES
+[feat1, audio1, fs1] = extract_dsp(file1_full);
+[feat2, audio2, fs2] = extract_dsp(file2_full);
+
+%% STEP 4: DISPLAY FEATURES (TABLE FORMAT)
+fprintf('\n===== FEATURE COMPARISON =====\n');
+fprintf('----------------------------------------------\n');
+fprintf('Feature           File1        File2\n');
+fprintf('----------------------------------------------\n');
+fprintf('Flatness        %.4f      %.4f\n', feat1(1), feat2(1));
+fprintf('ZCR             %.4f      %.4f\n', feat1(2), feat2(2));
+fprintf('Harmonic Var    %.4f      %.4f\n', feat1(3), feat2(3));
+fprintf('Energy          %.4f      %.4f\n', feat1(4), feat2(4));
+fprintf('----------------------------------------------\n');
+
+%% STEP 5: DSP DECISION
+w_flat = 0.5;
+w_zcr  = 0.2;
+w_harm = 0.2;
+w_energy = 0.1;
+
+score1 = w_flat*feat1(1) + w_zcr*feat1(2) + w_harm*feat1(3) + w_energy*feat1(4);
+score2 = w_flat*feat2(1) + w_zcr*feat2(2) + w_harm*feat2(3) + w_energy*feat2(4);
+
+%% DISTANCE COMPARISON (relative)
+dist1 = abs(score1 - score2);
+dist2 = dist1; % symmetric (for display)
+
+%% CLASSIFICATION
+if score1 > score2
+    result1 = "Likely Human Voice";
+    result2 = "Likely AI Voice";
+else
+    result1 = "Likely AI Voice";
+    result2 = "Likely Human Voice";
+end
+
+fprintf('\n===== FINAL RESULT =====\n');
+fprintf('File 1 (%s): %s\n', file1, result1);
+fprintf('File 2 (%s): %s\n', file2, result2);
+
+%% STEP 6: DECISION EXPLANATION
+fprintf('\n===== DECISION EXPLANATION =====\n');
+
+if result1 == "Likely Human Voice"
+    fprintf('File 1 classified as HUMAN because:\n');
+    if feat1(3) > feat2(3)
+        fprintf('- Higher harmonic variation\n');
+    end
+    if feat1(1) > feat2(1)
+        fprintf('- Higher spectral flatness\n');
+    end
+    if feat1(2) > feat2(2)
+        fprintf('- Higher ZCR\n');
+    end
+end
+
+if result2 == "Likely Human Voice"
+    fprintf('\nFile 2 classified as HUMAN because:\n');
+    if feat2(3) > feat1(3)
+        fprintf('- Higher harmonic variation\n');
+    end
+    if feat2(1) > feat1(1)
+        fprintf('- Higher spectral flatness\n');
+    end
+    if feat2(2) > feat1(2)
+        fprintf('- Higher ZCR\n');
+    end
+end
+
+%% STEP 7: BAR GRAPH (FEATURE COMPARISON)
+
+% Normalize features for visualization
+all_feat = [feat1; feat2];
+max_vals = max(all_feat);
+
+feat1_norm = feat1 ./ max_vals;
+feat2_norm = feat2 ./ max_vals;
+
+figure;
+bar([feat1_norm; feat2_norm]')
+legend('File 1','File 2')
+title('Normalized Feature Comparison')
+xlabel('Features')
+ylabel('Normalized Value')
+xticklabels({'Flatness','ZCR','Harmonic','Energy'})
+ylim([0 1])
+legend('File 1','File 2')
+title('Feature Comparison')
+xlabel('Features')
+ylabel('Values')
+xticklabels({'spectral Flatness','ZCR','Harmonic','Energy'})
+
+%% STEP 8: PLOTS FOR FILE 1
+figure;
+subplot(3,1,1);
+plot(audio1);
+title(['File 1: ', file1, ' - Time Domain']);
+
+subplot(3,1,2);
+N = length(audio1);
+Y = fft(audio1);
+halfN = floor(N/2);
+f = (0:N-1)*(fs1/N);
+plot(f(1:halfN), abs(Y(1:halfN)));
+title('Frequency Spectrum');
+
+subplot(3,1,3);
+spectrogram(audio1,256,128,512,fs1,'yaxis');
+title('Spectrogram');
+
+%% STEP 9: PLOTS FOR FILE 2
+figure;
+subplot(3,1,1);
+plot(audio2);
+title(['File 2: ', file2, ' - Time Domain']);
+
+subplot(3,1,2);
+N = length(audio2);
+Y = fft(audio2);
+halfN = floor(N/2);
+f = (0:N-1)*(fs2/N);
+plot(f(1:halfN), abs(Y(1:halfN)));
+title('Frequency Spectrum');
+
+subplot(3,1,3);
+spectrogram(audio2,256,128,512,fs2,'yaxis');
+title('Spectrogram');
+
+%% ================= FUNCTION =================
+function [features, audio, fs] = extract_dsp(file)
+
+    [audio, fs] = audioread(file);
+
+    if size(audio,2) > 1
+        audio = mean(audio,2);
+    end
+
+    audio = audio / max(abs(audio));
+
+    threshold = 0.01 * max(abs(audio));
+    audio = audio(abs(audio) > threshold);
+%%FFT(
+    N = length(audio);
+    Y = fft(audio);
+    halfN = floor(N/2);
+    magSpec = abs(Y(1:halfN));
+
+    flatness = exp(mean(log(magSpec + eps))) / mean(magSpec);
+
+    zcr = sum(abs(diff(sign(audio))))/(2*length(audio));
+
+    [~, locs] = findpeaks(magSpec,'MinPeakHeight',max(magSpec)*0.1);
+    if length(locs) > 2
+        spacing = diff(locs);
+        harmonic_var = std(spacing);
+    else
+        harmonic_var = 0;
+    end
+
+    energy = sum(audio.^2)/length(audio);
+
+    features = [flatness, zcr, harmonic_var, energy];
+end
